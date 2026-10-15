@@ -139,24 +139,6 @@ namespace Media {
 namespace View {
 namespace {
 
-struct RecognitionId {
-	uint64 sessionUniqueId = 0;
-	PhotoId photoId = 0;
-	DocumentId documentId = 0;
-
-	friend inline auto operator<=>(RecognitionId, RecognitionId) = default;
-};
-
-using RecognitionResult = Platform::TextRecognition::Result;
-using RecognitionCacheMap = base::flat_map<RecognitionId, RecognitionResult>;
-
-[[nodiscard]] RecognitionCacheMap *RecognitionCache() {
-	static auto cache = Platform::TextRecognition::IsAvailable()
-		? std::make_unique<base::flat_map<RecognitionId, RecognitionResult>>()
-		: nullptr;
-	return cache.get();
-}
-
 [[nodiscard]] int LayoutIndependentKey(not_null<QKeyEvent*> e) {
 	if constexpr (Platform::IsWindows()) {
 		const auto native = int(e->nativeVirtualKey());
@@ -926,15 +908,12 @@ OverlayWidget::OverlayWidget()
 
 	// Toggling between windowed and fullscreen changes the window flags,
 	// and that is a path where Qt recreates the native window, dropping
-	// everything set on the old one. Reapply on every handle change,
-	// and after the app-wide protection is applied to all windows.
-	rpl::combine(
-		_window->winIdValue(),
-		Core::App().screenshotProtection().activeValue()
-	) | rpl::on_next([=](WId, bool active) {
+	// everything set on the old one. Reapply on every handle change.
+	_window->winIdValue(
+	) | rpl::on_next([=](WId) {
 		Platform::SetWindowScreenshotProtection(
 			_window,
-			_screenshotProtected || active);
+			_screenshotProtected);
 	}, lifetime());
 
 	_window->screenValue(
@@ -1727,16 +1706,6 @@ void OverlayWidget::updateControls() {
 			_docSaveAs->hide();
 			_docCancel->moveToLeft(_docRect.x() + 2 * st::mediaviewFilePadding + st::mediaviewFileIconSize, _docRect.y() + st::mediaviewFilePadding + st::mediaviewFileLinksTop);
 			_docCancel->show();
-		} else if (_message && _message->forbidsSaving()) {
-			_docDownload->hide();
-			_docSaveAs->hide();
-			_docCancel->hide();
-			if (!_documentMedia->loaded(true)) {
-				DocumentSaveClickHandler::Save(
-					fileOrigin(),
-					_document,
-					DocumentSaveClickHandler::Mode::ToCacheOrFile);
-			}
 		} else {
 			if (_documentMedia->loaded(true)) {
 				_docDownload->hide();
@@ -6092,8 +6061,7 @@ void OverlayWidget::refreshScreenshotProtection() {
 	_screenshotProtected = contentNeedsScreenshotProtection();
 	Platform::SetWindowScreenshotProtection(
 		_window,
-		(_screenshotProtected
-			|| Core::App().screenshotProtection().active()));
+		_screenshotProtected);
 }
 
 void OverlayWidget::refreshSystemMediaControls() {
@@ -7408,6 +7376,7 @@ void OverlayWidget::handleKeyPress(not_null<QKeyEvent*> e) {
 		} else {
 			close();
 		}
+	// Ctrl + S is claimed against other shortcuts in eventFilter().
 	} else if (e == QKeySequence::Save || e == QKeySequence::SaveAs) {
 		saveAs();
 	} else if (key == Qt::Key_Copy || (key == Qt::Key_C && ctrl)) {
@@ -8741,6 +8710,9 @@ bool OverlayWidget::filterApplicationEvent(
 			return true;
 		} else if (key == Qt::Key_0 && ctrl) {
 			zoomReset();
+			return true;
+		} else if (event == QKeySequence::SaveAs
+			|| event == QKeySequence::Save) {
 			return true;
 		}
 		return false;
